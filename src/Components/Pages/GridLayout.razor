@@ -1,0 +1,222 @@
+﻿@using BlazorTestClean.DTO
+@using BlazorTestClean.Services
+@using Models
+@inject ApiService Api
+@inject IJSRuntime JS
+
+<h3>GridLayout</h3>
+<div class="shipDock">
+    <div class="gridLogic"
+         @onmousedown:preventDefault="true"
+         @onmousemove="OnMouseMove"
+         @onmouseup="(OnDefaultMouseUp)">
+
+        <div class="grid-wrapper">
+            <div class="grid grid-cells"
+                 style="grid-template-columns: repeat(@(Cols), @(CellSize)px);
+                        grid-template-rows: repeat(@(Rows), @(CellSize)px);">
+                @for (int r = 0; r < Rows; r++)
+                {
+                    @for (int c = 0; c < Cols; c++)
+                    {
+                        var row = r;
+                        var col = c;
+                        <div class="cell"
+                             style="width:@(CellSize); height:@(CellSize)"
+                             ondragover="event.preventDefault()"
+                             @onmouseup="e => OnMouseUp(e, row, col)">
+                        </div>
+                    }
+                }
+            </div>
+            <div>Greed based</div>
+            <div class="grid grid-ship"
+                 style="grid-template-columns: repeat(@(Cols), @(CellSize)px);
+                        grid-template-rows: repeat(@(Rows), @(CellSize)px);">
+                @foreach (var ship in PlacedShips)
+                {
+                    <div class="ship"
+                         style="grid-row:@(ship.Row + 1)/span @ship.Height;
+                                   grid-column:@(ship.Col + 1)/span @ship.Width;">
+                        @($"{ship.Width}x{ship.Height}")
+                    </div>
+                }
+            </div>
+        </div>
+
+        <h4>Available ships</h4>
+        <button @onclick="TryAgain">Try again</button>
+        <div class="ships">
+            @foreach (var ship in AvailableShips)
+            {
+                <div class="ship"
+                     @ref="ship.elRef"
+                     tabindex="0"
+                     style="width:@(ship.Width* CellSize)px;
+                               height:@(ship.Height* CellSize)px;
+                               @(ship.isPlaced ? "display:none" : "")"
+                     @onkeydown="(e => OnKeyDown(e, ship))"
+                     @onmousedown="(e => OnMouseDown(e, ship))"
+                     @onmouseover="(() => SetFocus(ship.elRef))">
+                    @($"{ship.Width}x{ship.Height}")
+                </div>
+            }
+        </div>
+
+        @if (PlacedShips.Count == AvailableShips.Count)
+        {
+            <h2>Congratulation</h2>
+            <button @onclick="RefreshFleet">Try another fleet</button>
+        }
+
+        @if (DraggedShip != null)
+        {
+            <div class="ship drag_ship"
+                 style="position: absolute;
+                    left:@($"{DraggedShip.Xpx}px"); top:@(DraggedShip.Ypx)px;
+                    width:@(DraggedShip.Width* CellSize)px;
+                    height:@(DraggedShip.Height* CellSize)px;
+                    pointer-events:none">
+                @($"{DraggedShip.Width}x{DraggedShip.Height}")
+            </div>
+        }
+    </div>
+</div>
+@code {
+    // Common code
+    private Port currentFleet = new Port();
+
+    // Call api on page init
+    protected override async Task OnInitializedAsync()
+    {
+        await InitiData();
+    }
+
+    private async Task InitiData()
+    {
+        currentFleet = await Api.GetFleet();
+        Rows = currentFleet.AnchorageSize.Height;
+        Cols = currentFleet.AnchorageSize.Width;
+        Grid = new int[Rows, Cols];
+        AvailableShips = currentFleet.Fleets
+                            .SelectMany(fleet => Enumerable.Range(0, fleet.ShipCount)
+                            .Select(_ => new Ship
+                            {
+                                Width = fleet.SingleShipDimensions.Width,
+                                Height = fleet.SingleShipDimensions.Height,
+                            })).ToList();
+    }
+
+    private int Rows;
+    private int Cols;
+    private const int CellSize = 20;
+
+    private int[,] Grid;
+
+    private List<Ship> AvailableShips = new List<Ship>();
+
+    private List<Ship> PlacedShips = new();
+    private Ship? DraggedShip;
+
+    private bool IsDragging;
+
+    private async Task SetFocus(ElementReference elRef)
+    {
+        await elRef.FocusAsync();
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e, Ship ship)
+    {
+        if (e.Code == "Space" || e.Key == " ")
+        {
+            var tempHeight = ship.Height;
+            ship.Height = ship.Width;
+            ship.Width = tempHeight;
+        }
+    }
+
+    private void TryAgain()
+    {
+        PlacedShips = new List<Ship>();
+        AvailableShips.ForEach(x => x.isPlaced = false);
+        for (int i = 0; i < Rows; i++)
+            for (int j = 0; j < Cols; j++)
+                Grid[i, j] = 0;
+    }
+
+    private void OnMouseDown(MouseEventArgs e, Ship ship)
+    {
+        IsDragging = true;
+        DraggedShip = ship;
+        DraggedShip.Xpx = e.ClientX;
+        DraggedShip.Ypx = e.ClientY;
+    }
+
+    private async Task OnMouseMove(MouseEventArgs e)
+    {
+        if (IsDragging && DraggedShip != null)
+        {
+            DraggedShip.Xpx = e.PageX;
+            DraggedShip.Ypx = e.PageY;
+            StateHasChanged();
+        }
+    }
+
+    private void OnDefaultMouseUp()
+    {
+        IsDragging = false;
+        DraggedShip = null;
+    }
+
+    private void OnMouseUp(MouseEventArgs e, int row, int col)
+    {
+        if (IsDragging && DraggedShip != null)
+        {
+            IsDragging = false;
+
+            if (CanPlace(DraggedShip, row, col))
+            {
+                Place(DraggedShip, row, col, PlacedShips.Count + 1);
+                DraggedShip.isPlaced = true;
+            }
+
+            DraggedShip = null;
+        }
+    }
+
+    private bool CanPlace(Ship ship, int row, int col)
+    {
+        if (row + ship.Height <= Rows && col + ship.Width <= Cols)
+        {
+            for (int i = row; i < row + ship.Height; i++)
+            {
+                for (int j = col; j < col + ship.Width; j++)
+                {
+                    if (Grid[i, j] != 0) return false;
+                }
+            }
+        }
+        else
+        {
+            Console.WriteLine("out of border");
+            return false;
+        }
+        return true;
+    }
+
+    private void Place(Ship ship, int row, int col, int id)
+    {
+        for (int i = row; i < row + ship.Height; i++)
+            for (int j = col; j < col + ship.Width; j++)
+                Grid[i, j] = id;
+        ship.Row = row;
+        ship.Col = col;
+        PlacedShips.Add(ship);
+    }
+
+    private async Task RefreshFleet()
+    {
+        await JS.InvokeVoidAsync("location.reload");
+    }
+
+}

@@ -1,0 +1,215 @@
+﻿@page "/"
+@inject IApiService Api
+@inject IJSRuntime JS
+
+<PageTitle>Ship doc</PageTitle>
+
+@if (showMessage)
+{
+    <div class="messageInfo">@message</div>
+}
+<div class="shipDock">
+    <div class="jsLogic"
+        @onmousedown:preventDefault="true"
+        @onmouseup="OnMouseUpJS"
+        @onmousemove="OnMouseMoveJS">
+        
+        <div class="col1of2">
+            <div class="drop-area" 
+                 @ref="DropAreaRef"
+                 style="width:@(currentFleet.AnchorageSize.Width* CellSize)px; height:@(currentFleet.AnchorageSize.Height* CellSize)px">
+                @foreach (var item in DroppedShips)
+                {
+                    <div class="placed" 
+                         style="width:@(item.Width)px;height:@(item.Height)px;top:@item.Toppx;left:@item.Leftpx;">
+                        @($"{item.Width/CellSize}x{item.Height/CellSize}")
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="col1of2"
+             style="padding-left:20px">
+            <h4>Available ships: press button "space" to rotate a focused ship before drug</h4>
+            <button @onclick="TryAgainJS">Try again</button>
+            <div class="items-list">
+                @foreach (var item in JSAvailableShips)
+                {
+                    <div class="draggableq"
+                         tabindex="1"
+                         @ref=item.elRef
+                         style= "width:@(item.Width* CellSize)px;
+                                height:@(item.Height* CellSize)px;
+                                @(item.isPlaced ? "display:none" : "")"
+                         @onmouseover="() => SetJSFocus(item.elRef)"
+                         @onmousedown="e => OnMouseDownJS(e, item)"
+                         @onkeydown="e => OnJSKeyDown(e, item)">
+                         @($"{item.Width}x{item.Height}")
+                    </div>
+                }
+            </div>
+
+            @if (DroppedShips.Count == JSAvailableShips.Count)
+            {
+                <h2>Congratulation</h2>
+                <button @onclick="RefreshFleet">Try another fleet</button>
+            }
+
+            @if (CurrentDragShip != null)
+            {
+                <div class="draggableq"
+                     style="position: absolute;
+                        left:@($"{CurrentDragShip.Xpx}px"); top:@(CurrentDragShip.Ypx)px;
+                        width:@(CurrentDragShip.Width* CellSize)px;
+                        height:@(CurrentDragShip.Height* CellSize)px;
+                        pointer-events:none">
+                    @($"{CurrentDragShip.Width}x{CurrentDragShip.Height}")
+                </div>
+            }
+        </div>
+    </div>
+</div>
+@code {
+    private ElementReference DropAreaRef;
+    private List<PlacedShip> DroppedShips = new List<PlacedShip>();
+    private Ship? CurrentDragShip;
+    private List<Ship> JSAvailableShips = new List<Ship>();
+    private int Rows;
+    private int Cols;
+    private const int CellSize = 20;
+
+    // Common code
+    private Port currentFleet = new Port();
+
+    // Call api on page init
+    protected override async Task OnInitializedAsync()
+    {
+        await InitiData();
+    }
+
+    private async Task InitiData()
+    {
+        currentFleet = await Api.GetFleet();
+        Rows = currentFleet.AnchorageSize.Height;
+        Cols = currentFleet.AnchorageSize.Width;
+        JSAvailableShips = currentFleet.Fleets
+                            .SelectMany(fleet => Enumerable.Range(0, fleet.ShipCount)
+                            .Select(_ => new Ship
+                            {
+                                Width = fleet.SingleShipDimensions.Width,
+                                Height = fleet.SingleShipDimensions.Height,
+                            })).ToList();
+    }
+
+    //Free-from mouse down event
+    private void OnMouseDownJS(MouseEventArgs e, Ship ship)
+    {
+        CurrentDragShip = ship;
+        CurrentDragShip.Xpx = e.ClientX;
+        CurrentDragShip.Ypx = e.ClientY;
+    }
+
+    //Free-from mouse move event
+    private async Task OnMouseMoveJS(MouseEventArgs e)
+    {
+        if (CurrentDragShip == null) return;
+        CurrentDragShip.Xpx = e.PageX;
+        CurrentDragShip.Ypx = e.PageY;
+        StateHasChanged();
+    }
+
+    //Free-from set focus on div under cursor
+    private async Task SetJSFocus(ElementReference elRef)
+    {
+        await elRef.FocusAsync();
+    }
+
+    //Free-form rotate ship
+    private void OnJSKeyDown(KeyboardEventArgs e, Ship ship)
+    {
+        if (e.Code == "Space" || e.Key == " ")
+        {
+            var tempHeight = ship.Height;
+            ship.Height = ship.Width;
+            ship.Width = tempHeight;
+        }
+    }
+
+    private void TryAgainJS()
+    {
+        DroppedShips = new List<PlacedShip>();
+        JSAvailableShips.ForEach(x => x.isPlaced = false);
+    }
+
+    //Free-from try place ship into area
+    public async Task OnMouseUpJS(MouseEventArgs e)
+    {
+        if (CurrentDragShip is null) return;
+        // Capture local copy
+        var dropAreaRef = DropAreaRef; 
+        if (dropAreaRef.Context == null) return;
+
+        var rect = await JS.InvokeAsync<DomRect>("dragDropWireUp.getRect", DropAreaRef);
+
+        if (rect == null) return;
+
+        var left = e.ClientX - rect.Left;
+        var top = e.ClientY - rect.Top;
+
+        // Check boundaries
+        if (left < 0 || top < 0 ||
+            left + CurrentDragShip.Width * CellSize > rect.Width-4 ||
+            top + CurrentDragShip.Height * CellSize > rect.Height-4)
+        {
+            CurrentDragShip = null;
+            ShowMessage("Out of borders");
+            return;
+        }
+
+        // Check overlap
+        foreach (var placed in DroppedShips)
+        {
+            bool overlap = !(left + CurrentDragShip.Width * CellSize <= placed.Left ||
+                             left >= placed.Left + placed.Width ||
+                             top + CurrentDragShip.Height * CellSize <= placed.Top ||
+                             top >= placed.Top + placed.Height);
+            if (overlap) 
+            { 
+                CurrentDragShip = null;
+                ShowMessage("Intersection with another ship");
+                return;
+            };
+        }
+
+        DroppedShips.Add(new PlacedShip
+        {
+            Width = CurrentDragShip.Width * CellSize,
+            Height = CurrentDragShip.Height * CellSize,
+            Left = left,
+            Top = top,
+        });
+
+        CurrentDragShip.isPlaced = true;
+
+        CurrentDragShip = null;
+    }
+
+    private string? message;
+    private bool showMessage = false;
+
+    private async Task ShowMessage(string messageText)
+    {
+        showMessage = true;
+        StateHasChanged();
+        message = messageText;
+        await Task.Delay(2000);
+        showMessage = false;
+        StateHasChanged();
+    }
+
+    private async Task RefreshFleet()
+    {
+        await JS.InvokeVoidAsync("location.reload");
+    }
+}
+

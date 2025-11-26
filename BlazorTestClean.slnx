@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BlazorTestClean.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="tests/SiteTests/SiteTests.csproj" Id="d614089d-3161-47b9-9159-fcd70876806d" />
+  </Folder>
+</Solution>
